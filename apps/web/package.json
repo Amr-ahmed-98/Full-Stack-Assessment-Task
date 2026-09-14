@@ -4,8 +4,8 @@
   "private": true,
   "scripts": {
     "build": "next build",
-    "dev": "next dev --port ${WEB_PORT:-3742}",
-    "start": "next start --port ${WEB_PORT:-3742}",
+    "dev": "node scripts/dev.mjs",
+    "start": "node scripts/start.mjs",
     "lint": "eslint src",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
