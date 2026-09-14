@@ -36,6 +36,9 @@ export class Task {
   @Prop({ type: Types.ObjectId, ref: 'User', required: true })
   createdBy: Types.ObjectId;
 
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null, index: true }) // default Null so new tasks start unassigned and old tasks will get null
+  assignee?: Types.ObjectId | null;
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -45,3 +48,4 @@ export const TaskSchema = SchemaFactory.createForClass(Task);
 TaskSchema.index({ projectId: 1, status: 1 });
 TaskSchema.index({ projectId: 1, number: 1 });
 TaskSchema.index({ createdAt: -1 });
+TaskSchema.index({ projectId: 1, assignee: 1 }); // this speeds up type queries and activity/filter lookups
