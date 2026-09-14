@@ -6,9 +6,11 @@ import { toUserSummary } from '../common/utils/serialize';
 import { Comment, type CommentDocument } from '../comments/schemas/comment.schema';
 import { canManage, ProjectAccessService } from '../projects/project-access.service';
 import { Project, type ProjectDocument } from '../projects/schemas/project.schema';
+import { ProjectMembersService } from '../project-members/project-members.service';
 import { UsersService } from '../users/users.service';
 import type { CreateTaskDto } from './dto/create-task.dto';
 import type { ListTasksQueryDto } from './dto/list-tasks.dto';
+import type { UpdateTaskAssigneeDto } from './dto/update-task-assignee.dto';
 import type { UpdateTaskDto } from './dto/update-task.dto';
 import type { UpdateTaskStatusDto } from './dto/update-task-status.dto';
 import { Task, type TaskDocument } from './schemas/task.schema';
@@ -20,8 +22,9 @@ export class TasksService {
     @InjectModel(Project.name) private readonly projectModel: Model<ProjectDocument>,
     @InjectModel(Comment.name) private readonly commentModel: Model<CommentDocument>,
     private readonly projectAccessService: ProjectAccessService,
+    private readonly projectMembersService: ProjectMembersService,
     private readonly usersService: UsersService,
-  ) {}
+  ) { }
 
   async findByProject(
     projectId: Types.ObjectId,
@@ -113,9 +116,61 @@ export class TasksService {
     return this.toDetail(task, access.project);
   }
 
+  async updateAssignee(
+    taskId: Types.ObjectId,
+    actorUserId: Types.ObjectId,
+    dto: UpdateTaskAssigneeDto,
+  ): Promise<TaskDetail> {
+    // First get the task and check if the actor is authorized to view the project
+    const task = await this.findTaskOrFail(taskId);
+    // make sure actor that making the request has access to this project
+    const access = await this.projectAccessService.assertCanView(task.projectId, actorUserId);
+
+    const newAssigneeId = dto.assigneeId ? new Types.ObjectId(dto.assigneeId) : null;
+    const currentAssigneeId = task.assignee ?? null;
+
+    const actorCanManage = canManage(access); // check if the actor is manager/owner/admin will return true
+
+    if (newAssigneeId) {
+      // Rule #1: assignee must be a member of the project
+      // users must have a ProjectMember row for this project
+      const assigneeRole = await this.projectMembersService.findRole(
+        task.projectId,
+        newAssigneeId,
+      );
+      // if no ProjectMember row exists findRole will return null and will reject the request and throw forbidden exception
+      if (!assigneeRole) {
+        throw new ForbiddenException('User is not a member of this project');
+      }
+
+      // Rule #2: managers/owners/admins may assign anyone regular members may only assign themselves
+      if (!actorCanManage && !newAssigneeId.equals(actorUserId)) {
+        throw new ForbiddenException('You can only assign this task to yourself');
+      }
+    } else {
+      // Rule #3: unassigning Managers may clear anyone and a regular member may only clear their own assignment
+      const isCurrentAssignee = currentAssigneeId?.equals(actorUserId) ?? false;
+      if (!actorCanManage && !isCurrentAssignee) {
+        throw new ForbiddenException('You do not have permission to unassign this task');
+      }
+    }
+
+    const previousAssigneeId = currentAssigneeId ? currentAssigneeId.toString() : null;
+    const nextAssigneeId = newAssigneeId ? newAssigneeId.toString() : null;
+
+    // If frontend sends same value twice by double click or re-render skip save to avoid create unnecessary activity records
+    if (previousAssigneeId === nextAssigneeId) {
+      return this.toDetail(task, access.project);
+    }
+
+    task.assignee = newAssigneeId;
+    await task.save();
+
+    return this.toDetail(task, access.project);
+  }
+
   async updateStatus(taskId: Types.ObjectId, dto: UpdateTaskStatusDto): Promise<TaskDetail> {
     const task = await this.findTaskOrFail(taskId);
-
     task.status = dto.status;
     await task.save();
 

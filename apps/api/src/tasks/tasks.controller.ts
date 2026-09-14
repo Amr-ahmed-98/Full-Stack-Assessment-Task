@@ -16,12 +16,13 @@ import { toObjectId } from '../common/utils/object-id';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { ListTasksQueryDto } from './dto/list-tasks.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
+import { UpdateTaskAssigneeDto } from './dto/update-task-assignee.dto';
 import { UpdateTaskStatusDto } from './dto/update-task-status.dto';
 import { TasksService } from './tasks.service';
 
 @Controller()
 export class TasksController {
-  constructor(private readonly tasksService: TasksService) {}
+  constructor(private readonly tasksService: TasksService) { }
 
   @Get('projects/:projectId/tasks')
   findByProject(
@@ -73,6 +74,23 @@ export class TasksController {
     @Body() dto: UpdateTaskStatusDto,
   ): Promise<TaskDetail> {
     return this.tasksService.updateStatus(toObjectId(taskId, 'task id'), dto);
+  }
+
+  // I do a new endpoint for assignee that not geniric for three reasons
+  // 1 - existing code already does this pattern for status and status have own DTO and own endpoint
+  // 2 - for assignee it has own rules so mixing it with general update will make that method complex and hard to test in isolation 
+  // 3 - one route doing one job
+  @Patch('tasks/:taskId/assignee')
+  updateAssignee(
+    @Param('taskId') taskId: string,
+    @CurrentUser('id') userId: string,
+    @Body() dto: UpdateTaskAssigneeDto,
+  ): Promise<TaskDetail> {
+    return this.tasksService.updateAssignee(
+      toObjectId(taskId, 'task id'),
+      toObjectId(userId, 'user id'),
+      dto,
+    );
   }
 
   @Delete('tasks/:taskId')
