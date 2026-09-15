@@ -267,12 +267,18 @@ export class TasksService {
     });
   }
 
-  async updateStatus(taskId: Types.ObjectId, dto: UpdateTaskStatusDto): Promise<TaskDetail> {
+  async updateStatus(
+    taskId: Types.ObjectId,
+    userId: Types.ObjectId,
+    dto: UpdateTaskStatusDto,
+  ): Promise<TaskDetail> {
     const task = await this.findTaskOrFail(taskId);
+    const { project } = await this.projectAccessService.assertCanView(task.projectId, userId);
+
     task.status = dto.status;
     await task.save();
 
-    return this.toDetail(task);
+    return this.toDetail(task, project);
   }
 
   async remove(taskId: Types.ObjectId, userId: Types.ObjectId): Promise<void> {
