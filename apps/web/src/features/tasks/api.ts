@@ -1,11 +1,15 @@
 import type {
   Paginated,
+  TaskActivityEntry,
   TaskDetail,
   TaskPriority,
   TaskStatus,
   TaskSummary,
 } from '@projectflow/shared';
 import { apiRequest } from '@/lib/api-client';
+
+/** Recent-history panel doesn't need to page by default — one screenful is enough. */
+const ACTIVITY_PAGE_SIZE = 20;
 
 export interface CreateTaskPayload {
   title: string;
@@ -48,5 +52,25 @@ export function updateTask(
   return apiRequest<TaskDetail>(`/tasks/${taskId}`, {
     method: 'PATCH',
     body: payload,
+  });
+}
+
+/** `assigneeId: null` clears the assignee — same endpoint handles both directions. */
+export function updateTaskAssignee(
+  taskId: string,
+  assigneeId: string | null,
+): Promise<TaskDetail> {
+  return apiRequest<TaskDetail>(`/tasks/${taskId}/assignee`, {
+    method: 'PATCH',
+    body: { assigneeId },
+  });
+}
+
+export function fetchTaskActivity(
+  taskId: string,
+  page = 1,
+): Promise<Paginated<TaskActivityEntry>> {
+  return apiRequest<Paginated<TaskActivityEntry>>(`/tasks/${taskId}/activity`, {
+    query: { page, pageSize: ACTIVITY_PAGE_SIZE },
   });
 }
