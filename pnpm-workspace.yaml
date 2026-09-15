@@ -2,9 +2,7 @@ packages:
   - "apps/*"
   - "packages/*"
 
-onlyBuiltDependencies:
-  - "@parcel/watcher"
-  - esbuild
-  - mongodb-memory-server
-  - sharp
-  - unrs-resolver
+allowBuilds:
+  '@parcel/watcher': true
+  mongodb-memory-server: true
+  unrs-resolver: true
