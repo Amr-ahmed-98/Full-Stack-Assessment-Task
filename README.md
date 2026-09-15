@@ -239,11 +239,19 @@ POST   /projects/:projectId/tasks
 GET    /tasks/:taskId
 PATCH  /tasks/:taskId
 PATCH  /tasks/:taskId/status
+PATCH  /tasks/:taskId/assignee
+GET    /tasks/:taskId/activity
 DELETE /tasks/:taskId
 
 GET    /tasks/:taskId/comments
 POST   /tasks/:taskId/comments
 ```
+
+`PATCH /tasks/:taskId/assignee` assigns or clears a task's assignee
+(`{ "assigneeId": string | null }`), enforcing project membership and the
+manager/self-only role rule (see Technical Decisions below). Every
+successful change writes a `task_activities` record, readable via
+`GET /tasks/:taskId/activity` (paginated, newest first).
 
 Errors share one shape:
 
@@ -265,3 +273,89 @@ parsing.
 
 Components are server components by default; `"use client"` is added only where
 interactivity or hooks require it.
+
+---
+
+## Testing
+
+```bash
+pnpm test
+```
+
+Runs the API's e2e suite (Jest + Supertest) against an in-memory MongoDB
+(`mongodb-memory-server`) — no local database needed, and nothing touches
+your real `MONGODB_URI`. First run downloads a MongoDB binary (~100 MB) and
+caches it; needs network access to `fastdl.mongodb.org`.
+
+Coverage includes: registration/login/auth guards, organization and project
+membership access rules, task CRUD and filtering, comments, and the task
+assignment feature end to end — self-assignment, manager-assigns-another,
+regular-member-blocked-from-assigning-others, outsider-blocked-from-being-
+assigned, unassign permissions, activity records created on every assignee
+change (including unassign), activity access blocked for non-members, the
+status-update authorization fix, and a concurrency test that fires
+simultaneous task creations and asserts no two get the same number.
+
+The frontend has no automated tests yet — see Known Limitations.
+
+---
+
+## Technical Decisions
+
+**Assignee gets its own endpoint (`PATCH /tasks/:taskId/assignee`), not
+folded into the general task `PATCH`.** Matches the existing `status`
+endpoint's pattern, and assignment carries enough of its own business logic
+(membership + role rules, activity logging) to be worth isolating.
+
+**Task activity is its own MongoDB collection (`task_activities`), not an
+array on `Task`.** Activity is append-only and unbounded over a task's
+lifetime; embedding it would bloat the task document and make it harder to
+index, paginate, and eventually archive independently.
+
+**Concurrent task numbering uses an atomic per-project counter, not the
+original `countDocuments` + 1.** `findOneAndUpdate` with `$inc` is a single
+indivisible operation in MongoDB — concurrent requests are serialized by the
+database, so two requests can never read the same "next" number. A unique
+index on `{ projectId, number }` is a second line of defense in case a bug
+elsewhere ever bypasses the counter.
+
+**Activity actor/from/to resolution is batched, not per-record.** Reading a
+page of activity collects every referenced user id first (actor, previous
+assignee, new assignee), dedupes, and resolves them in one query — avoids an
+N+1 query pattern on a list endpoint.
+
+**Frontend assignee changes are optimistic with rollback.** The task's
+assignee updates in the UI immediately on selection and reverts if the API
+rejects the change, so permission or membership errors don't leave the UI
+stuck on a loading state.
+
+**Reused `canManage()` instead of writing new permission logic.** Rule #2
+("OWNER/ADMIN/PROJECT_MANAGER may assign anyone") is exactly what the
+existing `ProjectAccessService.canManage()` already checks — assignment
+rules build on it rather than duplicating the role logic.
+
+---
+
+## Known Limitations
+
+- **No refresh-token flow.** The JWT access token is the only credential and
+  there's no revocation list; a leaked token stays valid until it naturally
+  expires. Acceptable for this assessment's scope, not for production.
+- **The manager/self-only permission check is duplicated.** The frontend
+  (`AssigneeSelector`) re-derives the same rule the backend enforces, to
+  decide what to show and enable. The backend still enforces the real check —
+  this is a UI-consistency risk, not a security gap — but if the rule
+  changes, both places need updating.
+- **Activity pagination is offset-based (`skip`/`limit`), not cursor-based.**
+  Fine at the volumes a single task accumulates today; would need to move to
+  cursor pagination before activity volume grows much further (see the
+  Scaling section in `ASSESSMENT_NOTES.md`).
+- **No frontend automated tests.** The backend has full e2e coverage of the
+  new feature and both bug fixes; the web app's optimistic-update logic and
+  permission gating are currently only verified manually.
+- **The activity feed doesn't update in real time for other viewers.** A
+  second person looking at the same task only sees a new activity entry
+  after their own next refetch, not the moment it happens.
+
+See `ASSESSMENT_NOTES.md` for the full reasoning behind these and the
+scaling plan for the activity system.
