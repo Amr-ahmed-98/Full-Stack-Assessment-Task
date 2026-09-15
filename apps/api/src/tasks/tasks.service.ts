@@ -3,6 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { type FilterQuery, Model, Types } from 'mongoose';
 import type { Paginated, TaskActivityEntry, TaskDetail, TaskSummary } from '@projectflow/shared';
 import { TaskActivityType } from '@projectflow/shared';
+import { Counter, type CounterDocument } from './schemas/counter.schema';
 import type { PaginationQueryDto } from '../common/dto/pagination.dto';
 import { toUserSummary } from '../common/utils/serialize';
 import { Comment, type CommentDocument } from '../comments/schemas/comment.schema';
@@ -25,6 +26,7 @@ export class TasksService {
     @InjectModel(Project.name) private readonly projectModel: Model<ProjectDocument>,
     @InjectModel(Comment.name) private readonly commentModel: Model<CommentDocument>,
     @InjectModel(TaskActivity.name) private readonly activityModel: Model<TaskActivityDocument>,
+    @InjectModel(Counter.name) private readonly counterModel: Model<CounterDocument>,
     private readonly projectAccessService: ProjectAccessService,
     private readonly projectMembersService: ProjectMembersService,
     private readonly usersService: UsersService,
@@ -65,8 +67,7 @@ export class TasksService {
   ): Promise<TaskDetail> {
     const { project } = await this.projectAccessService.assertCanView(projectId, userId);
 
-    const taskCount = await this.taskModel.countDocuments({ projectId });
-    const number = taskCount + 1;
+    const number = await this.getNextTaskNumber(projectId);
 
     const task = await this.taskModel.create({
       projectId,
@@ -80,6 +81,57 @@ export class TasksService {
     });
 
     return this.toDetail(task, project);
+  }
+
+  /**
+   * Returns the next task number for a project, safe under concurrent calls.
+   *
+   * The old code did `countDocuments` then `+1` — two requests arriving at the same
+   * time can both read the same count and both compute the same "next" number, so two
+   * tasks end up with the same key (e.g. two ENG-101s). `findOneAndUpdate` with `$inc`
+   * is a single atomic operation in MongoDB: even if two requests call it at the same
+   * moment, the database serializes them and each gets a distinct, correctly
+   * incremented value. No transaction needed for this — a single-document atomic
+   * update is enough.
+   */
+  private async getNextTaskNumber(projectId: Types.ObjectId): Promise<number> {
+    const counterId = `task-number:${projectId.toString()}`;
+
+    const incremented = await this.counterModel.findOneAndUpdate(
+      { _id: counterId },
+      { $inc: { seq: 1 } },
+      { new: true },
+    );
+    if (incremented) {
+      return incremented.seq;
+    }
+
+    // First task ever created for this project — no counter document exists yet.
+    // Bootstrap it from the current task count. If two requests race to bootstrap at
+    // the same time, the unique _id means only one insert wins; the other falls back
+    // to the atomic increment above, so no duplicate number can be produced either way.
+    const currentCount = await this.taskModel.countDocuments({ projectId });
+    try {
+      const created = await this.counterModel.create({
+        _id: counterId,
+        seq: currentCount + 1,
+      });
+      return created.seq;
+    } catch (error) {
+      if (this.isDuplicateKeyError(error)) {
+        const doc = await this.counterModel.findOneAndUpdate(
+          { _id: counterId },
+          { $inc: { seq: 1 } },
+          { new: true, upsert: true },
+        );
+        return doc!.seq;
+      }
+      throw error;
+    }
+  }
+
+  private isDuplicateKeyError(error: unknown): boolean {
+    return typeof error === 'object' && error !== null && (error as { code?: number }).code === 11000;
   }
 
   async findOne(taskId: Types.ObjectId, userId: Types.ObjectId): Promise<TaskDetail> {
