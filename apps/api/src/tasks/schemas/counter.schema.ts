@@ -9,6 +9,7 @@ export type CounterDocument = HydratedDocument<Counter>;
  */
 @Schema({ collection: 'counters' })
 export class Counter {
+    @Prop({ type: String })
     _id: string;
 
     @Prop({ required: true, default: 0 })
