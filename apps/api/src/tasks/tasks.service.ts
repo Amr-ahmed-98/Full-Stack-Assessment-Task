@@ -1,8 +1,9 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { type FilterQuery, Model, Types } from 'mongoose';
-import type { Paginated, TaskDetail, TaskSummary } from '@projectflow/shared';
+import type { Paginated, TaskActivityEntry, TaskDetail, TaskSummary } from '@projectflow/shared';
 import { TaskActivityType } from '@projectflow/shared';
+import type { PaginationQueryDto } from '../common/dto/pagination.dto';
 import { toUserSummary } from '../common/utils/serialize';
 import { Comment, type CommentDocument } from '../comments/schemas/comment.schema';
 import { canManage, ProjectAccessService } from '../projects/project-access.service';
@@ -180,6 +181,90 @@ export class TasksService {
     });
 
     return this.toDetail(task, access.project);
+  }
+
+  async findActivity(
+    taskId: Types.ObjectId,
+    userId: Types.ObjectId,
+    query: PaginationQueryDto,
+  ): Promise<Paginated<TaskActivityEntry>> {
+    // Get the task and make sure the actor is authorized to view the project
+    const task = await this.findTaskOrFail(taskId);
+    await this.projectAccessService.assertCanView(task.projectId, userId);
+
+    // newest first and add pagination for less payload so add default value for pagination and index added so mongo don't have to scan the whole collection 
+    // and this for better performance
+    const [records, total] = await Promise.all([
+      this.activityModel
+        .find({ task: taskId })
+        .sort({ createdAt: -1 })
+        .skip(query.skip)
+        .limit(query.pageSize)
+        .exec(),
+      this.activityModel.countDocuments({ task: taskId }),
+    ]);
+
+    return {
+      items: await this.toActivityEntries(records),
+      total,
+      page: query.page,
+      pageSize: query.pageSize,
+    };
+  }
+
+  // two queries run parallel same as comments service to avoid creating multiple queries for each record so it will be more efficient 
+  private async toActivityEntries(
+    records: TaskActivityDocument[],
+  ): Promise<TaskActivityEntry[]> {
+    if (records.length === 0) {
+      return [];
+    }
+
+    // Collect every user id referenced by this page (actor, previous assignee, new assignee)
+    // and resolve them in a single query instead of one query per record.
+    const userIds = new Set<string>();
+    for (const record of records) {
+      userIds.add(record.actor.toString());
+      if (record.metadata.from) {
+        userIds.add(record.metadata.from);
+      }
+      if (record.metadata.to) {
+        userIds.add(record.metadata.to);
+      }
+    }
+
+    const users = await this.usersService.findManyByIds(
+      [...userIds].map((id) => new Types.ObjectId(id)),
+    );
+    const usersById = new Map(users.map((user) => [user._id.toString(), user]));
+
+    const summaryFor = (id: string | null) => {
+      if (!id) {
+        return null;
+      }
+      const user = usersById.get(id);
+      return user ? toUserSummary(user) : null;
+    };
+
+    // flatmap and return on missing actor that will skips broken records instead of crashing
+    return records.flatMap((record) => {
+      const actor = usersById.get(record.actor.toString());
+      if (!actor) {
+        return [];
+      }
+      return [
+        {
+          id: record._id.toString(),
+          type: record.type,
+          task: record.task.toString(),
+          actor: toUserSummary(actor),
+          metadata: { from: record.metadata.from, to: record.metadata.to },
+          from: summaryFor(record.metadata.from),
+          to: summaryFor(record.metadata.to),
+          createdAt: record.createdAt.toISOString(),
+        },
+      ];
+    });
   }
 
   async updateStatus(taskId: Types.ObjectId, dto: UpdateTaskStatusDto): Promise<TaskDetail> {

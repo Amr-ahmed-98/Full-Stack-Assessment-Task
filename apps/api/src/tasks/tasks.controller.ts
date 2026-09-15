@@ -10,8 +10,9 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import type { Paginated, TaskDetail, TaskSummary } from '@projectflow/shared';
+import type { Paginated, TaskActivityEntry, TaskDetail, TaskSummary } from '@projectflow/shared';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { PaginationQueryDto } from '../common/dto/pagination.dto';
 import { toObjectId } from '../common/utils/object-id';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { ListTasksQueryDto } from './dto/list-tasks.dto';
@@ -74,6 +75,19 @@ export class TasksController {
     @Body() dto: UpdateTaskStatusDto,
   ): Promise<TaskDetail> {
     return this.tasksService.updateStatus(toObjectId(taskId, 'task id'), dto);
+  }
+
+  @Get('tasks/:taskId/activity')
+  findActivity(
+    @Param('taskId') taskId: string,
+    @CurrentUser('id') userId: string,
+    @Query() query: PaginationQueryDto,
+  ): Promise<Paginated<TaskActivityEntry>> {
+    return this.tasksService.findActivity(
+      toObjectId(taskId, 'task id'),
+      toObjectId(userId, 'user id'),
+      query,
+    );
   }
 
   // I do a new endpoint for assignee that not geniric for three reasons
