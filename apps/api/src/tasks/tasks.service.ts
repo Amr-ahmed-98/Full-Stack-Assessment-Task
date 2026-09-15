@@ -2,6 +2,7 @@ import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/commo
 import { InjectModel } from '@nestjs/mongoose';
 import { type FilterQuery, Model, Types } from 'mongoose';
 import type { Paginated, TaskDetail, TaskSummary } from '@projectflow/shared';
+import { TaskActivityType } from '@projectflow/shared';
 import { toUserSummary } from '../common/utils/serialize';
 import { Comment, type CommentDocument } from '../comments/schemas/comment.schema';
 import { canManage, ProjectAccessService } from '../projects/project-access.service';
@@ -14,6 +15,7 @@ import type { UpdateTaskAssigneeDto } from './dto/update-task-assignee.dto';
 import type { UpdateTaskDto } from './dto/update-task.dto';
 import type { UpdateTaskStatusDto } from './dto/update-task-status.dto';
 import { Task, type TaskDocument } from './schemas/task.schema';
+import { TaskActivity, type TaskActivityDocument } from './schemas/task-activity.schema';
 
 @Injectable()
 export class TasksService {
@@ -21,6 +23,7 @@ export class TasksService {
     @InjectModel(Task.name) private readonly taskModel: Model<TaskDocument>,
     @InjectModel(Project.name) private readonly projectModel: Model<ProjectDocument>,
     @InjectModel(Comment.name) private readonly commentModel: Model<CommentDocument>,
+    @InjectModel(TaskActivity.name) private readonly activityModel: Model<TaskActivityDocument>,
     private readonly projectAccessService: ProjectAccessService,
     private readonly projectMembersService: ProjectMembersService,
     private readonly usersService: UsersService,
@@ -165,6 +168,16 @@ export class TasksService {
 
     task.assignee = newAssigneeId;
     await task.save();
+
+    // I put activity model here because the task must saved first and then log activity only if save successful 
+    // so now it covers all transitions (Unassigned → Assigned , Assigned → Different user , Assigned → Unassigned )
+
+    await this.activityModel.create({
+      task: task._id,
+      type: TaskActivityType.TASK_ASSIGNEE_CHANGED,
+      actor: actorUserId,
+      metadata: { from: previousAssigneeId, to: nextAssigneeId },
+    });
 
     return this.toDetail(task, access.project);
   }
