@@ -18,13 +18,13 @@ export function validateEnvironment(config: Record<string, unknown>): AppEnviron
   if (missing.length > 0) {
     throw new Error(
       `Missing required environment variables: ${missing.join(', ')}. ` +
-        'Copy .env.example to .env in the repository root and fill it in.',
+      'Copy .env.example to .env in the repository root and fill it in.',
     );
   }
 
-  const port = Number(config.API_PORT ?? 4732);
+  const port = Number(config.PORT ?? config.API_PORT ?? 4732);
   if (!Number.isInteger(port) || port <= 0) {
-    throw new Error('API_PORT must be a positive integer');
+    throw new Error('PORT (or API_PORT) must be a positive integer');
   }
 
   return {
